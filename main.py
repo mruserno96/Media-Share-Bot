@@ -10,10 +10,10 @@ WEBHOOK_URL = os.getenv("WEBHOOK_URL", "https://media-share-bot.onrender.com")
 bot = telebot.TeleBot(BOT_TOKEN)
 app = Flask(__name__)
 
-# Admins: dict user_id -> username
+# Admins: set of user_ids
 ADMIN_IDS = {
-    7900116525: None,
-    7810231866: None
+    7900116525,
+    7810231866
 }
 
 # Video store: token -> {file_id, single_use}
@@ -39,12 +39,10 @@ def webhook():
 @bot.message_handler(commands=['start'])
 def handle_start(message):
     user_id = message.from_user.id
-    username = message.from_user.username
     args = message.text.split()
 
-    # Update admin username if admin
+    # Admin greeting
     if user_id in ADMIN_IDS:
-        ADMIN_IDS[user_id] = username
         bot.reply_to(message, "👋 Hello Admin! You can send videos to generate permanent links.\nUse /help to see all admin commands.")
         return
 
@@ -64,13 +62,10 @@ def handle_start(message):
 @bot.message_handler(content_types=['video', 'document'])
 def handle_video(message):
     user_id = message.from_user.id
-    username = message.from_user.username
 
     if user_id not in ADMIN_IDS:
         bot.reply_to(message, "❌ Only admin can upload videos. Please contact admin.")
         return
-
-    ADMIN_IDS[user_id] = username  # update username
 
     video = message.video or (message.document if message.document.mime_type.startswith("video/") else None)
     if not video:
@@ -96,7 +91,7 @@ def add_admin(message):
 
     args = message.text.split()
     if len(args) < 2:
-        bot.reply_to(message, "⚠️ Usage: /addadmin <user_id> [username]")
+        bot.reply_to(message, "⚠️ Usage: /addadmin <user_id>")
         return
 
     try:
@@ -105,14 +100,12 @@ def add_admin(message):
         bot.reply_to(message, "❌ Invalid user_id.")
         return
 
-    username = args[2] if len(args) > 2 else None
-
     if new_id in ADMIN_IDS:
         bot.reply_to(message, "ℹ️ This user is already an admin.")
         return
 
-    ADMIN_IDS[new_id] = username
-    bot.reply_to(message, f"✅ Added new admin: `{new_id}` @{username if username else 'N/A'}", parse_mode="Markdown")
+    ADMIN_IDS.add(new_id)
+    bot.reply_to(message, f"✅ Added new admin: `{new_id}`", parse_mode="Markdown")
 
 @bot.message_handler(commands=['removeadmin'])
 def remove_admin(message):
@@ -140,14 +133,19 @@ def remove_admin(message):
         bot.reply_to(message, "⚠️ You cannot remove yourself!")
         return
 
-    ADMIN_IDS.pop(remove_id)
+    ADMIN_IDS.remove(remove_id)
     bot.reply_to(message, f"✅ Removed admin: `{remove_id}`", parse_mode="Markdown")
 
 @bot.message_handler(commands=['listadmins'])
 def list_admins(message):
     text = "👑 Current Admins:\n"
-    for uid, uname in ADMIN_IDS.items():
-        text += f"- `{uid}` @{uname if uname else 'N/A'}\n"
+    for uid in ADMIN_IDS:
+        try:
+            user = bot.get_chat(uid)
+            username = f"@{user.username}" if user.username else user.first_name
+        except:
+            username = "N/A"
+        text += f"- `{uid}` {username}\n"
     bot.reply_to(message, text, parse_mode="Markdown")
 
 # ---------------- Help ----------------
@@ -158,20 +156,14 @@ def help_command(message):
         help_text = (
             "👑 Admin Commands:\n"
             "/start - Start bot\n"
-            "/id - Get your user ID\n"
-            "/addadmin <user_id> [username] - Add a new admin\n"
+            "/addadmin <user_id> - Add a new admin\n"
             "/removeadmin <user_id> - Remove an admin (cannot remove self)\n"
-            "/listadmins - List all admins\n"
+            "/listadmins - List all admins with usernames\n"
             "Send videos - Upload video to generate permanent link"
         )
     else:
         help_text = "👋 You are a normal user. Only admins can upload videos."
     bot.reply_to(message, help_text)
-
-# ---------------- Get User ID ----------------
-@bot.message_handler(commands=['id'])
-def get_id(message):
-    bot.reply_to(message, f"Your Telegram user_id: `{message.from_user.id}`", parse_mode="Markdown")
 
 # ---------------- Run Flask ----------------
 if __name__ == "__main__":
