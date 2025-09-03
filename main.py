@@ -10,7 +10,7 @@ WEBHOOK_URL = os.getenv("WEBHOOK_URL", "https://media-share-bot.onrender.com")
 bot = telebot.TeleBot(BOT_TOKEN)
 app = Flask(__name__)
 
-# Admin IDs
+# Admin IDs (do admin)
 ADMIN_IDS = [7357160729, 7810231866]
 
 # Store videos: token -> {file_id, single_use}
@@ -42,30 +42,29 @@ def handle_start(message):
     user_id = message.from_user.id
     args = message.text.split()
 
+    # ---------------- Admin greeting always ----------------
+    if user_id in ADMIN_IDS:
+        bot.reply_to(message, "👋 Hello Admin! You can send videos to generate permanent links.")
+        return
+
+    # ---------------- Normal user ----------------
     if len(args) > 1:  # token link
         token = args[1]
         data = video_store.get(token)
-
         if not data:
             bot.reply_to(message, "❌ Invalid link.")
             return
-
         bot.send_chat_action(message.chat.id, "upload_video")
         bot.send_video(message.chat.id, data["file_id"])
-        if data.get("single_use"):
-            del video_store[token]
-
-    else:  # normal start message
-        if user_id in ADMIN_IDS:
-            bot.reply_to(message, "👋 Hello Admin! You can send videos to generate permanent links.")
-        else:
-            bot.reply_to(message, "👋 Hello! I am Normal Media Sharing Bot.")
+    else:
+        bot.reply_to(message, "👋 Hello! I am Normal Media Sharing Bot.")
 
 
 @bot.message_handler(content_types=['video', 'document'])
 def handle_video(message):
     user_id = message.from_user.id
 
+    # ---------------- Admin only ----------------
     if user_id not in ADMIN_IDS:
         bot.reply_to(message, "❌ Only admin can upload videos. Please contact admin.")
         return
