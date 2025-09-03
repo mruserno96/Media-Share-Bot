@@ -18,8 +18,7 @@ supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 # Admins: dict user_id -> username
 ADMIN_IDS = {
-    7900116525: None,
-    7810231866: None
+    7900116525: None
 }
 
 # ---------------- Helpers ----------------
