@@ -11,7 +11,7 @@ bot = telebot.TeleBot(BOT_TOKEN)
 app = Flask(__name__)
 
 # Admin IDs
-ADMIN_IDS = [7357160729, 7810231866]
+ADMIN_IDS = [7900116525, 7810231866]
 
 # Store videos: token -> {file_id, single_use}
 video_store = {}
