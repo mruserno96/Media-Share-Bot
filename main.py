@@ -3,16 +3,17 @@ import secrets
 import telebot
 from flask import Flask, request
 
+# ---------------- Config ----------------
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 WEBHOOK_URL = os.getenv("WEBHOOK_URL", "https://media-share-bot.onrender.com")
 
 bot = telebot.TeleBot(BOT_TOKEN)
 app = Flask(__name__)
 
-# Admin IDs list
+# Admin IDs
 ADMIN_IDS = [7357160729, 7810231866]
 
-# Temporary store: token -> {file_id, single_use}
+# Store videos: token -> {file_id, single_use}
 video_store = {}
 
 # ---------------- Webhook Routes ----------------
@@ -28,8 +29,6 @@ def getMessage():
 def webhook():
     if not BOT_TOKEN or not WEBHOOK_URL:
         return "❌ BOT_TOKEN or WEBHOOK_URL not set", 500
-
-    # safe webhook set
     try:
         bot.set_webhook(url=f"{WEBHOOK_URL}/{BOT_TOKEN}")
         return "✅ Webhook set", 200
@@ -37,7 +36,7 @@ def webhook():
         return f"❌ Error setting webhook: {str(e)}", 500
 
 
-# ---------------- Handlers ----------------
+# ---------------- Bot Handlers ----------------
 @bot.message_handler(commands=['start'])
 def handle_start(message):
     args = message.text.split()
