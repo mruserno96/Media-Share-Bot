@@ -148,6 +148,45 @@ def list_admins(message):
         text += f"- `{uid}` {username}\n"
     bot.reply_to(message, text, parse_mode="Markdown")
 
+# ---------------- Link Management ----------------
+@bot.message_handler(commands=['listlinks'])
+def list_links(message):
+    user_id = message.from_user.id
+    if user_id not in ADMIN_IDS:
+        bot.reply_to(message, "❌ Only admins can view links.")
+        return
+
+    if not video_store:
+        bot.reply_to(message, "ℹ️ No active links available.")
+        return
+
+    text = "🎬 Active Links:\n"
+    for token, data in video_store.items():
+        link = f"https://t.me/{bot.get_me().username}?start={token}"
+        text += f"- `{token}` → {link}\n"
+    bot.reply_to(message, text, parse_mode="Markdown")
+
+
+@bot.message_handler(commands=['deletelink'])
+def delete_link(message):
+    user_id = message.from_user.id
+    if user_id not in ADMIN_IDS:
+        bot.reply_to(message, "❌ Only admins can delete links.")
+        return
+
+    args = message.text.split()
+    if len(args) < 2:
+        bot.reply_to(message, "⚠️ Usage: /deletelink <token>")
+        return
+
+    token = args[1]
+    if token not in video_store:
+        bot.reply_to(message, "❌ Invalid token or link not found.")
+        return
+
+    video_store.pop(token)
+    bot.reply_to(message, f"✅ Link `{token}` has been permanently destroyed.", parse_mode="Markdown")
+
 # ---------------- Help ----------------
 @bot.message_handler(commands=['help'])
 def help_command(message):
@@ -159,6 +198,8 @@ def help_command(message):
             "/addadmin <user_id> - Add a new admin\n"
             "/removeadmin <user_id> - Remove an admin (cannot remove self)\n"
             "/listadmins - List all admins with usernames\n"
+            "/listlinks - Show all active video links\n"
+            "/deletelink <token> - Destroy a specific link permanently\n"
             "Send videos - Upload video to generate permanent link"
         )
     else:
