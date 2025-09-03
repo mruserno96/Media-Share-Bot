@@ -50,12 +50,7 @@ def handle_start(message):
     username = message.from_user.username
     args = message.text.split()
 
-    if user_id in ADMIN_IDS:
-        ADMIN_IDS[user_id] = username
-        bot.reply_to(message, "👋 Hello Admin! Send a video to generate permanent links.\nUse /help to see commands.")
-        return
-
-    # User clicked a link with token
+    # 1️⃣ Token flow always first (works for admin + normal users)
     if len(args) > 1:
         token = args[1]
         response = supabase.table("videos").select("file_id").eq("token", token).execute()
@@ -65,8 +60,19 @@ def handle_start(message):
         file_id = response.data[0]["file_id"]
         bot.send_chat_action(message.chat.id, "upload_video")
         bot.send_video(message.chat.id, file_id)
-    else:
-        bot.reply_to(message, "👋 Hello! Send me a valid link to get a video.")
+        return
+
+    # 2️⃣ If no token: admin greeting
+    if user_id in ADMIN_IDS:
+        ADMIN_IDS[user_id] = username
+        bot.reply_to(
+            message,
+            "👋 Hello Admin! Send a video to generate permanent links.\nUse /help to see commands."
+        )
+        return
+
+    # 3️⃣ Normal user without token
+    bot.reply_to(message, "👋 Hello! Send me a valid link to get a video.")
 
 # ---------------- Video Upload ----------------
 @bot.message_handler(content_types=['video', 'document'])
