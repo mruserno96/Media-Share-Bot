@@ -1,6 +1,6 @@
 import os
 import secrets
-import json
+import sqlite3
 import telebot
 from flask import Flask, request
 
@@ -11,43 +11,56 @@ WEBHOOK_URL = os.getenv("WEBHOOK_URL", "https://media-share-bot.onrender.com")
 bot = telebot.TeleBot(BOT_TOKEN)
 app = Flask(__name__)
 
-# Admins: set of user_ids
-ADMIN_IDS = {
-    7900116525,
-    7810231866
-}
+# Admins
+ADMIN_IDS = {7900116525, 7810231866}
 
-# JSON file for storing video links
-VIDEO_STORE_FILE = "video_store.json"
+# ---------------- Database ----------------
+DB_FILE = "videos.db"
 
-# Video store: token -> {file_id, single_use}
-video_store = {}
+def init_db():
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS videos (
+            token TEXT PRIMARY KEY,
+            file_id TEXT NOT NULL
+        )
+    """)
+    conn.commit()
+    conn.close()
 
+def save_video(token, file_id):
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute("INSERT INTO videos (token, file_id) VALUES (?, ?)", (token, file_id))
+    conn.commit()
+    conn.close()
 
-# ---------------- Storage Functions ----------------
-def save_videos():
-    """Save video_store dict to JSON file"""
-    try:
-        with open(VIDEO_STORE_FILE, "w") as f:
-            json.dump(video_store, f)
-    except Exception as e:
-        print("Error saving videos:", e)
+def delete_video(token):
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute("DELETE FROM videos WHERE token = ?", (token,))
+    conn.commit()
+    conn.close()
 
+def get_video(token):
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute("SELECT file_id FROM videos WHERE token = ?", (token,))
+    row = c.fetchone()
+    conn.close()
+    return row[0] if row else None
 
-def load_videos():
-    """Load video_store dict from JSON file"""
-    global video_store
-    if os.path.exists(VIDEO_STORE_FILE):
-        try:
-            with open(VIDEO_STORE_FILE, "r") as f:
-                video_store = json.load(f)
-        except Exception as e:
-            print("Error loading videos:", e)
-            video_store = {}
+def list_videos():
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute("SELECT token FROM videos")
+    rows = c.fetchall()
+    conn.close()
+    return [r[0] for r in rows]
 
-
-# Load videos at startup
-load_videos()
+# Init database
+init_db()
 
 # ---------------- Webhook Routes ----------------
 @app.route('/' + BOT_TOKEN, methods=['POST'])
@@ -57,7 +70,6 @@ def getMessage():
     bot.process_new_updates([update])
     return "OK", 200
 
-
 @app.route("/")
 def webhook():
     try:
@@ -66,38 +78,33 @@ def webhook():
     except Exception as e:
         return f"❌ Error setting webhook: {str(e)}", 500
 
-
 # ---------------- Bot Handlers ----------------
 @bot.message_handler(commands=['start'])
 def handle_start(message):
     user_id = message.from_user.id
     args = message.text.split()
 
-    # Admin greeting
     if user_id in ADMIN_IDS:
-        bot.reply_to(message, "👋 Hello Admin! You can send videos to generate permanent links.\nUse /help to see all admin commands.")
+        bot.reply_to(message, "👋 Hello Admin! Use /help for commands.")
         return
 
-    # Normal users
-    if len(args) > 1:  # token link
+    if len(args) > 1:  # token
         token = args[1]
-        data = video_store.get(token)
-        if not data:
+        file_id = get_video(token)
+        if not file_id:
             bot.reply_to(message, "❌ Invalid link.")
             return
         bot.send_chat_action(message.chat.id, "upload_video")
-        bot.send_video(message.chat.id, data["file_id"])
+        bot.send_video(message.chat.id, file_id)
     else:
-        bot.reply_to(message, "👋 Hello! I am Normal Media Sharing Bot.")
-
+        bot.reply_to(message, "👋 Hello! I am Media Sharing Bot.")
 
 # ---------------- Video Upload ----------------
 @bot.message_handler(content_types=['video', 'document'])
 def handle_video(message):
     user_id = message.from_user.id
-
     if user_id not in ADMIN_IDS:
-        bot.reply_to(message, "❌ Only admin can upload videos. Please contact admin.")
+        bot.reply_to(message, "❌ Only admins can upload.")
         return
 
     video = message.video or (message.document if message.document.mime_type.startswith("video/") else None)
@@ -106,110 +113,33 @@ def handle_video(message):
         return
 
     token = secrets.token_urlsafe(8)
-    video_store[token] = {
-        "file_id": video.file_id,
-        "single_use": False
-    }
-    save_videos()  # save after upload
+    save_video(token, video.file_id)
 
     link = f"https://t.me/{bot.get_me().username}?start={token}"
-    bot.reply_to(message, f"✅ Permanent link generated:\n{link}\n\nNo expiry.")
-
+    bot.reply_to(message, f"✅ Permanent link:\n{link}")
 
 # ---------------- Admin Commands ----------------
-@bot.message_handler(commands=['addadmin'])
-def add_admin(message):
-    user_id = message.from_user.id
-    if user_id not in ADMIN_IDS:
-        bot.reply_to(message, "❌ Only admins can add other admins.")
-        return
-
-    args = message.text.split()
-    if len(args) < 2:
-        bot.reply_to(message, "⚠️ Usage: /addadmin <user_id>")
-        return
-
-    try:
-        new_id = int(args[1])
-    except ValueError:
-        bot.reply_to(message, "❌ Invalid user_id.")
-        return
-
-    if new_id in ADMIN_IDS:
-        bot.reply_to(message, "ℹ️ This user is already an admin.")
-        return
-
-    ADMIN_IDS.add(new_id)
-    bot.reply_to(message, f"✅ Added new admin: `{new_id}`", parse_mode="Markdown")
-
-
-@bot.message_handler(commands=['removeadmin'])
-def remove_admin(message):
-    user_id = message.from_user.id
-    if user_id not in ADMIN_IDS:
-        bot.reply_to(message, "❌ Only admins can remove other admins.")
-        return
-
-    args = message.text.split()
-    if len(args) < 2:
-        bot.reply_to(message, "⚠️ Usage: /removeadmin <user_id>")
-        return
-
-    try:
-        remove_id = int(args[1])
-    except ValueError:
-        bot.reply_to(message, "❌ Invalid user_id.")
-        return
-
-    if remove_id not in ADMIN_IDS:
-        bot.reply_to(message, "ℹ️ This user is not an admin.")
-        return
-
-    if remove_id == user_id:
-        bot.reply_to(message, "⚠️ You cannot remove yourself!")
-        return
-
-    ADMIN_IDS.remove(remove_id)
-    bot.reply_to(message, f"✅ Removed admin: `{remove_id}`", parse_mode="Markdown")
-
-
-@bot.message_handler(commands=['listadmins'])
-def list_admins(message):
-    text = "👑 Current Admins:\n"
-    for uid in ADMIN_IDS:
-        try:
-            user = bot.get_chat(uid)
-            username = f"@{user.username}" if user.username else user.first_name
-        except:
-            username = "N/A"
-        text += f"- `{uid}` {username}\n"
-    bot.reply_to(message, text, parse_mode="Markdown")
-
-
-# ---------------- Link Management ----------------
 @bot.message_handler(commands=['listlinks'])
 def list_links(message):
-    user_id = message.from_user.id
-    if user_id not in ADMIN_IDS:
+    if message.from_user.id not in ADMIN_IDS:
         bot.reply_to(message, "❌ Only admins can view links.")
         return
 
-    if not video_store:
-        bot.reply_to(message, "ℹ️ No active links available.")
+    tokens = list_videos()
+    if not tokens:
+        bot.reply_to(message, "ℹ️ No active links.")
         return
 
     text = "🎬 Active Links:\n"
-    for token, data in video_store.items():
+    for token in tokens:
         link = f"https://t.me/{bot.get_me().username}?start={token}"
         text += f"- `{token}` → {link}\n"
     bot.reply_to(message, text, parse_mode="Markdown")
 
-
 @bot.message_handler(commands=['deletelink'])
-def delete_link(message):
-    user_id = message.from_user.id
-    if user_id not in ADMIN_IDS:
-        bot.reply_to(message, "❌ Only admins can delete links.")
+def delete_link_cmd(message):
+    if message.from_user.id not in ADMIN_IDS:
+        bot.reply_to(message, "❌ Only admins can delete.")
         return
 
     args = message.text.split()
@@ -218,34 +148,26 @@ def delete_link(message):
         return
 
     token = args[1]
-    if token not in video_store:
-        bot.reply_to(message, "❌ Invalid token or link not found.")
+    if not get_video(token):
+        bot.reply_to(message, "❌ Invalid token.")
         return
 
-    video_store.pop(token)
-    save_videos()  # save after delete
-    bot.reply_to(message, f"✅ Link `{token}` has been permanently destroyed.", parse_mode="Markdown")
-
+    delete_video(token)
+    bot.reply_to(message, f"✅ Link `{token}` deleted.", parse_mode="Markdown")
 
 # ---------------- Help ----------------
 @bot.message_handler(commands=['help'])
 def help_command(message):
-    user_id = message.from_user.id
-    if user_id in ADMIN_IDS:
+    if message.from_user.id in ADMIN_IDS:
         help_text = (
             "👑 Admin Commands:\n"
-            "/start - Start bot\n"
-            "/addadmin <user_id> - Add a new admin\n"
-            "/removeadmin <user_id> - Remove an admin (cannot remove self)\n"
-            "/listadmins - List all admins with usernames\n"
-            "/listlinks - Show all active video links\n"
-            "/deletelink <token> - Destroy a specific link permanently\n"
-            "Send videos - Upload video to generate permanent link"
+            "/listlinks - Show all video links\n"
+            "/deletelink <token> - Delete a link\n"
+            "Send videos - Upload and generate permanent link"
         )
     else:
-        help_text = "👋 You are a normal user. Only admins can upload videos."
+        help_text = "👋 Only admins can upload videos."
     bot.reply_to(message, help_text)
-
 
 # ---------------- Run Flask ----------------
 if __name__ == "__main__":
