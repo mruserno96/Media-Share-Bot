@@ -10,13 +10,13 @@ WEBHOOK_URL = os.getenv("WEBHOOK_URL", "https://media-share-bot.onrender.com")
 bot = telebot.TeleBot(BOT_TOKEN)
 app = Flask(__name__)
 
-# Admins: store dict user_id -> username (username may be None)
+# Admins: dict user_id -> username
 ADMIN_IDS = {
     7900116525: None,
     7810231866: None
 }
 
-# Store videos: token -> {file_id, single_use}
+# Video store: token -> {file_id, single_use}
 video_store = {}
 
 # ---------------- Webhook Routes ----------------
@@ -29,8 +29,6 @@ def getMessage():
 
 @app.route("/")
 def webhook():
-    if not BOT_TOKEN or not WEBHOOK_URL:
-        return "❌ BOT_TOKEN or WEBHOOK_URL not set", 500
     try:
         bot.set_webhook(url=f"{WEBHOOK_URL}/{BOT_TOKEN}")
         return "✅ Webhook set", 200
@@ -79,10 +77,9 @@ def handle_video(message):
         bot.reply_to(message, "⚠️ Please send a valid video file.")
         return
 
-    file_id = video.file_id
     token = secrets.token_urlsafe(8)
     video_store[token] = {
-        "file_id": file_id,
+        "file_id": video.file_id,
         "single_use": False
     }
 
@@ -99,7 +96,7 @@ def add_admin(message):
 
     args = message.text.split()
     if len(args) < 2:
-        bot.reply_to(message, "⚠️ Usage: /addadmin <user_id> [@username]")
+        bot.reply_to(message, "⚠️ Usage: /addadmin <user_id> [username]")
         return
 
     try:
@@ -115,7 +112,7 @@ def add_admin(message):
         return
 
     ADMIN_IDS[new_id] = username
-    bot.reply_to(message, f"✅ Added new admin: `{new_id}` @{username if username else ''}", parse_mode="Markdown")
+    bot.reply_to(message, f"✅ Added new admin: `{new_id}` @{username if username else 'N/A'}", parse_mode="Markdown")
 
 @bot.message_handler(commands=['removeadmin'])
 def remove_admin(message):
@@ -148,8 +145,10 @@ def remove_admin(message):
 
 @bot.message_handler(commands=['listadmins'])
 def list_admins(message):
-    admin_list = "\n".join([f"- `{uid}` @{uname if uname else 'N/A'}" for uid, uname in ADMIN_IDS.items()])
-    bot.reply_to(message, f"👑 Current Admins:\n{admin_list}", parse_mode="Markdown")
+    text = "👑 Current Admins:\n"
+    for uid, uname in ADMIN_IDS.items():
+        text += f"- `{uid}` @{uname if uname else 'N/A'}\n"
+    bot.reply_to(message, text, parse_mode="Markdown")
 
 # ---------------- Help ----------------
 @bot.message_handler(commands=['help'])
@@ -160,7 +159,7 @@ def help_command(message):
             "👑 Admin Commands:\n"
             "/start - Start bot\n"
             "/id - Get your user ID\n"
-            "/addadmin <user_id> [@username] - Add a new admin\n"
+            "/addadmin <user_id> [username] - Add a new admin\n"
             "/removeadmin <user_id> - Remove an admin (cannot remove self)\n"
             "/listadmins - List all admins\n"
             "Send videos - Upload video to generate permanent link"
