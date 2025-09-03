@@ -1,5 +1,6 @@
 import os
 import secrets
+import json
 import telebot
 from flask import Flask, request
 
@@ -16,8 +17,37 @@ ADMIN_IDS = {
     7810231866
 }
 
+# JSON file for storing video links
+VIDEO_STORE_FILE = "video_store.json"
+
 # Video store: token -> {file_id, single_use}
 video_store = {}
+
+
+# ---------------- Storage Functions ----------------
+def save_videos():
+    """Save video_store dict to JSON file"""
+    try:
+        with open(VIDEO_STORE_FILE, "w") as f:
+            json.dump(video_store, f)
+    except Exception as e:
+        print("Error saving videos:", e)
+
+
+def load_videos():
+    """Load video_store dict from JSON file"""
+    global video_store
+    if os.path.exists(VIDEO_STORE_FILE):
+        try:
+            with open(VIDEO_STORE_FILE, "r") as f:
+                video_store = json.load(f)
+        except Exception as e:
+            print("Error loading videos:", e)
+            video_store = {}
+
+
+# Load videos at startup
+load_videos()
 
 # ---------------- Webhook Routes ----------------
 @app.route('/' + BOT_TOKEN, methods=['POST'])
@@ -27,6 +57,7 @@ def getMessage():
     bot.process_new_updates([update])
     return "OK", 200
 
+
 @app.route("/")
 def webhook():
     try:
@@ -34,6 +65,7 @@ def webhook():
         return "✅ Webhook set", 200
     except Exception as e:
         return f"❌ Error setting webhook: {str(e)}", 500
+
 
 # ---------------- Bot Handlers ----------------
 @bot.message_handler(commands=['start'])
@@ -58,6 +90,7 @@ def handle_start(message):
     else:
         bot.reply_to(message, "👋 Hello! I am Normal Media Sharing Bot.")
 
+
 # ---------------- Video Upload ----------------
 @bot.message_handler(content_types=['video', 'document'])
 def handle_video(message):
@@ -77,9 +110,11 @@ def handle_video(message):
         "file_id": video.file_id,
         "single_use": False
     }
+    save_videos()  # save after upload
 
     link = f"https://t.me/{bot.get_me().username}?start={token}"
     bot.reply_to(message, f"✅ Permanent link generated:\n{link}\n\nNo expiry.")
+
 
 # ---------------- Admin Commands ----------------
 @bot.message_handler(commands=['addadmin'])
@@ -106,6 +141,7 @@ def add_admin(message):
 
     ADMIN_IDS.add(new_id)
     bot.reply_to(message, f"✅ Added new admin: `{new_id}`", parse_mode="Markdown")
+
 
 @bot.message_handler(commands=['removeadmin'])
 def remove_admin(message):
@@ -136,6 +172,7 @@ def remove_admin(message):
     ADMIN_IDS.remove(remove_id)
     bot.reply_to(message, f"✅ Removed admin: `{remove_id}`", parse_mode="Markdown")
 
+
 @bot.message_handler(commands=['listadmins'])
 def list_admins(message):
     text = "👑 Current Admins:\n"
@@ -147,6 +184,7 @@ def list_admins(message):
             username = "N/A"
         text += f"- `{uid}` {username}\n"
     bot.reply_to(message, text, parse_mode="Markdown")
+
 
 # ---------------- Link Management ----------------
 @bot.message_handler(commands=['listlinks'])
@@ -185,7 +223,9 @@ def delete_link(message):
         return
 
     video_store.pop(token)
+    save_videos()  # save after delete
     bot.reply_to(message, f"✅ Link `{token}` has been permanently destroyed.", parse_mode="Markdown")
+
 
 # ---------------- Help ----------------
 @bot.message_handler(commands=['help'])
@@ -205,6 +245,7 @@ def help_command(message):
     else:
         help_text = "👋 You are a normal user. Only admins can upload videos."
     bot.reply_to(message, help_text)
+
 
 # ---------------- Run Flask ----------------
 if __name__ == "__main__":
