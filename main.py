@@ -17,37 +17,35 @@ app = Flask(__name__)
 # Supabase client
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-# Owner ID (replace with your real Telegram ID)
-OWNER_ID = 8356178010
-
-# Admins (dict user_id -> username)
-ADMIN_IDS = {
-    OWNER_ID: None
-}
+# ---------------- Owner / Admins ----------------
+OWNER_ID = 8356178010  # replace with your real Telegram ID
+ADMIN_IDS = {OWNER_ID: None}  # start with only owner
 
 # ---------------- Helpers ----------------
 def escape_markdown(text: str) -> str:
-    escape_chars = r"\_*[]()~`>#+-=|{}.! "
-    return "".join(['\\' + c if c in escape_chars else c for c in text])
+    escape_chars = r'\_*[]()~`>#+-=|{}.!'
+    return ''.join(['\\' + c if c in escape_chars else c for c in text])
 
-def get_admin_keyboard(is_owner: bool = False):
-    """Generate admin buttons"""
-    keyboard = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
-
-    # Common features for all admins
-    keyboard.add(
+def get_owner_keyboard():
+    """Keyboard for owner"""
+    kb = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
+    kb.add(
+        types.KeyboardButton("➕ Add Admin"),
+        types.KeyboardButton("❌ Remove Admin"),
+        types.KeyboardButton("👑 List Admins"),
         types.KeyboardButton("📂 List Videos"),
         types.KeyboardButton("🔥 Destroy Video"),
     )
+    return kb
 
-    # Owner-only features
-    if is_owner:
-        keyboard.add(
-            types.KeyboardButton("➕ Add Admin"),
-            types.KeyboardButton("❌ Remove Admin"),
-        )
-
-    return keyboard
+def get_admin_keyboard():
+    """Keyboard for admins"""
+    kb = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
+    kb.add(
+        types.KeyboardButton("📂 List Videos"),
+        types.KeyboardButton("🔥 Destroy Video"),
+    )
+    return kb
 
 # ---------------- Webhook Routes ----------------
 @app.route('/' + BOT_TOKEN, methods=['POST'])
@@ -66,13 +64,15 @@ def webhook():
         return f"❌ Error setting webhook: {str(e)}", 500
 
 # ---------------- Bot Handlers ----------------
+pending_action = {}  # store user pending actions
+
 @bot.message_handler(commands=['start'])
 def handle_start(message):
     user_id = message.from_user.id
     username = message.from_user.username
     args = message.text.split()
 
-    # 1️⃣ If token is provided
+    # Token link flow
     if len(args) > 1:
         token = args[1]
         response = supabase.table("videos").select("file_id").eq("token", token).execute()
@@ -84,31 +84,36 @@ def handle_start(message):
         bot.send_video(message.chat.id, file_id)
         return
 
-    # 2️⃣ If admin or owner
-    if user_id in ADMIN_IDS:
+    # Owner
+    if user_id == OWNER_ID:
         ADMIN_IDS[user_id] = username
-        is_owner = (user_id == OWNER_ID)
         bot.send_message(
             message.chat.id,
-            "👋 Hello Admin! Use the buttons below to manage videos.",
-            reply_markup=get_admin_keyboard(is_owner)
+            "👑 Welcome Owner! Use the buttons below:",
+            reply_markup=get_owner_keyboard()
         )
         return
 
-    # 3️⃣ Normal user
-    bot.reply_to(message, "👋 Hello! Send me a valid link to get a video.")
+    # Admins
+    if user_id in ADMIN_IDS:
+        ADMIN_IDS[user_id] = username
+        bot.send_message(
+            message.chat.id,
+            "👋 Welcome Admin! You can manage videos.",
+            reply_markup=get_admin_keyboard()
+        )
+        return
+
+    # Normal users
+    bot.reply_to(message, "👋 Hello! Send me a valid video link to watch.")
 
 # ---------------- Video Upload ----------------
 @bot.message_handler(content_types=['video', 'document'])
 def handle_video(message):
     user_id = message.from_user.id
-    username = message.from_user.username
-
     if user_id not in ADMIN_IDS:
         bot.reply_to(message, "❌ Only admins can upload videos.")
         return
-
-    ADMIN_IDS[user_id] = username
 
     video = message.video or (message.document if message.document.mime_type.startswith("video/") else None)
     if not video:
@@ -116,95 +121,46 @@ def handle_video(message):
         return
 
     token = secrets.token_urlsafe(8)
-
     supabase.table("videos").insert({
         "token": token,
         "file_id": video.file_id
     }).execute()
 
     link = f"https://t.me/{bot.get_me().username}?start={token}"
-    bot.reply_to(message, f"✅ Permanent link generated:\n{link}\n\nNo expiry.")
+    bot.reply_to(message, f"✅ Permanent link generated:\n{link}")
 
-# ---------------- Admin Button Actions ----------------
-@bot.message_handler(func=lambda m: m.text in ["➕ Add Admin", "❌ Remove Admin", "📂 List Videos", "🔥 Destroy Video"])
-def handle_admin_buttons(message):
+# ---------------- Owner/Admin Button Actions ----------------
+@bot.message_handler(func=lambda m: m.text in ["➕ Add Admin", "❌ Remove Admin", "👑 List Admins", "📂 List Videos", "🔥 Destroy Video"])
+def handle_buttons(message):
     user_id = message.from_user.id
-    if user_id not in ADMIN_IDS:
-        bot.reply_to(message, "❌ Only admins can use these buttons.")
-        return
 
     if message.text == "➕ Add Admin":
         if user_id != OWNER_ID:
             bot.reply_to(message, "❌ Only the owner can add admins.")
             return
-        bot.reply_to(message, "Send user_id with /addadmin <user_id>")
+        pending_action[user_id] = "add_admin"
+        bot.reply_to(message, "👉 Enter user_id to add as admin:")
 
     elif message.text == "❌ Remove Admin":
         if user_id != OWNER_ID:
             bot.reply_to(message, "❌ Only the owner can remove admins.")
             return
-        bot.reply_to(message, "Send user_id with /removeadmin <user_id>")
+        pending_action[user_id] = "remove_admin"
+        bot.reply_to(message, "👉 Enter user_id to remove from admins:")
+
+    elif message.text == "👑 List Admins":
+        if user_id != OWNER_ID:
+            bot.reply_to(message, "❌ Only the owner can list admins.")
+            return
+        text = "👑 Current Admins:\n"
+        for uid, uname in ADMIN_IDS.items():
+            text += f"- `{uid}` @{uname if uname else 'N/A'}\n"
+        bot.reply_to(message, text, parse_mode="Markdown")
 
     elif message.text == "📂 List Videos":
-        list_videos(message)
-
-    elif message.text == "🔥 Destroy Video":
-        bot.reply_to(message, "Send token with /destroy <token>")
-
-# ---------------- Owner Commands ----------------
-@bot.message_handler(commands=['addadmin'])
-def add_admin(message):
-    user_id = message.from_user.id
-    if user_id != OWNER_ID:
-        bot.reply_to(message, "❌ Only the owner can add admins.")
-        return
-    args = message.text.split()
-    if len(args) < 2:
-        bot.reply_to(message, "⚠️ Usage: /addadmin <user_id>")
-        return
-    try:
-        new_id = int(args[1])
-    except ValueError:
-        bot.reply_to(message, "❌ Invalid user_id.")
-        return
-    if new_id in ADMIN_IDS:
-        bot.reply_to(message, "ℹ️ This user is already an admin.")
-        return
-    ADMIN_IDS[new_id] = None
-    bot.reply_to(message, f"✅ Added new admin: `{new_id}`", parse_mode="Markdown")
-
-@bot.message_handler(commands=['removeadmin'])
-def remove_admin(message):
-    user_id = message.from_user.id
-    if user_id != OWNER_ID:
-        bot.reply_to(message, "❌ Only the owner can remove admins.")
-        return
-    args = message.text.split()
-    if len(args) < 2:
-        bot.reply_to(message, "⚠️ Usage: /removeadmin <user_id>")
-        return
-    try:
-        remove_id = int(args[1])
-    except ValueError:
-        bot.reply_to(message, "❌ Invalid user_id.")
-        return
-    if remove_id not in ADMIN_IDS:
-        bot.reply_to(message, "ℹ️ This user is not an admin.")
-        return
-    if remove_id == OWNER_ID:
-        bot.reply_to(message, "⚠️ You cannot remove the owner!")
-        return
-    ADMIN_IDS.pop(remove_id)
-    bot.reply_to(message, f"✅ Removed admin: `{remove_id}`", parse_mode="Markdown")
-
-# ---------------- Shared Commands ----------------
-@bot.message_handler(commands=['listvideos'])
-def list_videos(message):
-    user_id = message.from_user.id
-    if user_id not in ADMIN_IDS:
-        bot.reply_to(message, "❌ Only admins can list videos.")
-        return
-    try:
+        if user_id not in ADMIN_IDS:
+            bot.reply_to(message, "❌ Only admins can list videos.")
+            return
         response = supabase.table("videos").select("token, created_at").execute()
         videos = response.data
         if not videos:
@@ -216,27 +172,56 @@ def list_videos(message):
             token = escape_markdown(v['token'])
             created = escape_markdown(v['created_at'])
             safe_link = escape_markdown(link)
-            text += f"🎬 Token: `{token}`\n🔗 Link: {safe_link}\n🕒 Created: {created}\n\n"
+            text += f"🎬 Token: `{token}`\n🔗 Link: {safe_link}\n🕒 {created}\n\n"
         bot.reply_to(message, text, parse_mode="MarkdownV2")
-    except Exception as e:
-        bot.reply_to(message, f"❌ Error fetching videos:\n{str(e)}")
 
-@bot.message_handler(commands=['destroy'])
-def destroy_video(message):
+    elif message.text == "🔥 Destroy Video":
+        if user_id not in ADMIN_IDS:
+            bot.reply_to(message, "❌ Only admins can destroy videos.")
+            return
+        pending_action[user_id] = "destroy_video"
+        bot.reply_to(message, "👉 Enter token to destroy video:")
+
+# ---------------- Handle Pending Actions ----------------
+@bot.message_handler(func=lambda m: m.from_user.id in pending_action)
+def handle_pending(message):
     user_id = message.from_user.id
-    if user_id not in ADMIN_IDS:
-        bot.reply_to(message, "❌ Only admins can destroy videos.")
-        return
-    args = message.text.split()
-    if len(args) < 2:
-        bot.reply_to(message, "⚠️ Usage: /destroy <token>")
-        return
-    token = args[1]
-    response = supabase.table("videos").delete().eq("token", token).execute()
-    if response.data:
-        bot.reply_to(message, f"✅ Destroyed video with token `{token}`", parse_mode="Markdown")
-    else:
-        bot.reply_to(message, "❌ Token not found.")
+    action = pending_action.get(user_id)
+
+    if action == "add_admin":
+        try:
+            new_id = int(message.text.strip())
+            if new_id in ADMIN_IDS:
+                bot.reply_to(message, "ℹ️ Already an admin.")
+            else:
+                ADMIN_IDS[new_id] = None
+                bot.reply_to(message, f"✅ Added new admin: `{new_id}`", parse_mode="Markdown")
+        except:
+            bot.reply_to(message, "❌ Invalid user_id.")
+        pending_action.pop(user_id, None)
+
+    elif action == "remove_admin":
+        try:
+            remove_id = int(message.text.strip())
+            if remove_id not in ADMIN_IDS:
+                bot.reply_to(message, "❌ Not an admin.")
+            elif remove_id == OWNER_ID:
+                bot.reply_to(message, "⚠️ Cannot remove owner.")
+            else:
+                ADMIN_IDS.pop(remove_id)
+                bot.reply_to(message, f"✅ Removed admin: `{remove_id}`", parse_mode="Markdown")
+        except:
+            bot.reply_to(message, "❌ Invalid user_id.")
+        pending_action.pop(user_id, None)
+
+    elif action == "destroy_video":
+        token = message.text.strip()
+        response = supabase.table("videos").delete().eq("token", token).execute()
+        if response.data:
+            bot.reply_to(message, f"✅ Destroyed video with token `{token}`", parse_mode="Markdown")
+        else:
+            bot.reply_to(message, "❌ Token not found.")
+        pending_action.pop(user_id, None)
 
 # ---------------- Run Flask ----------------
 if __name__ == "__main__":
