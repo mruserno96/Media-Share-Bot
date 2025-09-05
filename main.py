@@ -36,7 +36,6 @@ def get_admin_keyboard():
         types.KeyboardButton("👑 List Admins"),
         types.KeyboardButton("📂 List Videos"),
         types.KeyboardButton("🔥 Destroy Video"),
-        types.KeyboardButton("ℹ️ Help"),
     )
     return keyboard
 
@@ -63,7 +62,7 @@ def handle_start(message):
     username = message.from_user.username
     args = message.text.split()
 
-    # 1️⃣ Token flow
+    # 1️⃣ Token flow always first
     if len(args) > 1:
         token = args[1]
         response = supabase.table("videos").select("file_id").eq("token", token).execute()
@@ -75,19 +74,12 @@ def handle_start(message):
         bot.send_video(message.chat.id, file_id)
         return
 
-    # 2️⃣ Admin greeting
+    # 2️⃣ If no token: admin greeting
     if user_id in ADMIN_IDS:
         ADMIN_IDS[user_id] = username
         bot.send_message(
             message.chat.id,
-            "👋 Hello Admin! Use the buttons below to manage the bot.\n\n"
-            "📌 Quick Menu:\n"
-            "- ➕ Add Admin (/addadmin <user_id>)\n"
-            "- ❌ Remove Admin (/removeadmin <user_id>)\n"
-            "- 👑 List Admins (/listadmins)\n"
-            "- 📂 List Videos (/listvideos)\n"
-            "- 🔥 Destroy Video (/destroy <token>)\n"
-            "- 🎬 Upload Video (send any video/document)",
+            "👋 Hello Admin! Use the buttons below to manage the bot.",
             reply_markup=get_admin_keyboard()
         )
         return
@@ -123,7 +115,7 @@ def handle_video(message):
     bot.reply_to(message, f"✅ Permanent link generated:\n{link}\n\nNo expiry.")
 
 # ---------------- Admin Button Actions ----------------
-@bot.message_handler(func=lambda m: m.text in ["➕ Add Admin", "❌ Remove Admin", "👑 List Admins", "📂 List Videos", "🔥 Destroy Video", "ℹ️ Help"])
+@bot.message_handler(func=lambda m: m.text in ["➕ Add Admin", "❌ Remove Admin", "👑 List Admins", "📂 List Videos", "🔥 Destroy Video"])
 def handle_admin_buttons(message):
     user_id = message.from_user.id
     if user_id not in ADMIN_IDS:
@@ -140,14 +132,13 @@ def handle_admin_buttons(message):
         list_videos(message)
     elif message.text == "🔥 Destroy Video":
         bot.reply_to(message, "Send token with /destroy <token>")
-    elif message.text == "ℹ️ Help":
-        help_command(message)
 
 # ---------------- Admin Commands ----------------
 @bot.message_handler(commands=['addadmin'])
 def add_admin(message):
     user_id = message.from_user.id
     if user_id not in ADMIN_IDS:
+        bot.reply_to(message, "❌ Only admins can add other admins.")
         return
     args = message.text.split()
     if len(args) < 2:
@@ -168,6 +159,7 @@ def add_admin(message):
 def remove_admin(message):
     user_id = message.from_user.id
     if user_id not in ADMIN_IDS:
+        bot.reply_to(message, "❌ Only admins can remove other admins.")
         return
     args = message.text.split()
     if len(args) < 2:
@@ -190,6 +182,7 @@ def remove_admin(message):
 @bot.message_handler(commands=['listadmins'])
 def list_admins(message):
     if message.from_user.id not in ADMIN_IDS:
+        bot.reply_to(message, "❌ Only admins can view admins.")
         return
     text = "👑 Current Admins:\n"
     for uid, uname in ADMIN_IDS.items():
@@ -199,6 +192,7 @@ def list_admins(message):
 @bot.message_handler(commands=['listvideos'])
 def list_videos(message):
     if message.from_user.id not in ADMIN_IDS:
+        bot.reply_to(message, "❌ Only admins can list videos.")
         return
     try:
         response = supabase.table("videos").select("token, created_at").execute()
@@ -220,6 +214,7 @@ def list_videos(message):
 @bot.message_handler(commands=['destroy'])
 def destroy_video(message):
     if message.from_user.id not in ADMIN_IDS:
+        bot.reply_to(message, "❌ Only admins can destroy videos.")
         return
     args = message.text.split()
     if len(args) < 2:
@@ -231,21 +226,6 @@ def destroy_video(message):
         bot.reply_to(message, f"✅ Destroyed video with token `{token}`", parse_mode="Markdown")
     else:
         bot.reply_to(message, "❌ Token not found.")
-
-@bot.message_handler(commands=['help'])
-def help_command(message):
-    if message.from_user.id not in ADMIN_IDS:
-        return
-    help_text = (
-        "👑 Admin Help Menu:\n"
-        "- ➕ Add Admin (/addadmin <user_id>)\n"
-        "- ❌ Remove Admin (/removeadmin <user_id>)\n"
-        "- 👑 List Admins (/listadmins)\n"
-        "- 📂 List Videos (/listvideos)\n"
-        "- 🔥 Destroy Video (/destroy <token>)\n"
-        "- 🎬 Upload Video (send any video/document)"
-    )
-    bot.reply_to(message, help_text)
 
 # ---------------- Run Flask ----------------
 if __name__ == "__main__":
