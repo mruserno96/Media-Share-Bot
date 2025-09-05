@@ -17,19 +17,17 @@ app = Flask(__name__)
 # Supabase client
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-# Admins: dict user_id -> username
-ADMIN_IDS = {
-    8356178010: None  # 👑 Owner (replace with your Telegram user_id)
-}
-OWNER_ID = list(ADMIN_IDS.keys())[0]
+# ---------------- Owner / Admin Setup ----------------
+OWNER_ID = 8356178010  # replace with your own Telegram numeric ID
+ADMIN_IDS = {OWNER_ID: None}  # owner is also an admin
 
-# Pending actions (for Add/Remove/Destory flows)
-pending_action = {}  # user_id -> action
+# temporary states for Add/Remove flows
+pending_action = {}  # {user_id: "addadmin" / "removeadmin" / "destroy"}
 
 # ---------------- Helpers ----------------
 def escape_markdown(text: str) -> str:
-    escape_chars = r'\_*~`>#+-=|{}.!'
-    return ''.join(['\\' + c if c in escape_chars else c for c in text])
+    escape_chars = r"\_*[]()~`>#+-=|{}.!"
+    return "".join(["\\" + c if c in escape_chars else c for c in text])
 
 def get_admin_keyboard():
     """Generate admin buttons"""
@@ -40,12 +38,11 @@ def get_admin_keyboard():
         types.KeyboardButton("👑 List Admins"),
         types.KeyboardButton("📂 List Videos"),
         types.KeyboardButton("🔥 Destroy Video"),
-        types.KeyboardButton("ℹ️ Help"),
     )
     return keyboard
 
 # ---------------- Webhook Routes ----------------
-@app.route('/' + BOT_TOKEN, methods=['POST'])
+@app.route("/" + BOT_TOKEN, methods=["POST"])
 def getMessage():
     json_str = request.stream.read().decode("utf-8")
     update = telebot.types.Update.de_json(json_str)
@@ -61,13 +58,13 @@ def webhook():
         return f"❌ Error setting webhook: {str(e)}", 500
 
 # ---------------- Bot Handlers ----------------
-@bot.message_handler(commands=['start'])
+@bot.message_handler(commands=["start"])
 def handle_start(message):
     user_id = message.from_user.id
     username = message.from_user.username
     args = message.text.split()
 
-    # Token link flow
+    # 1️⃣ Token flow (user clicks old video link)
     if len(args) > 1:
         token = args[1]
         response = supabase.table("videos").select("file_id").eq("token", token).execute()
@@ -79,21 +76,21 @@ def handle_start(message):
         bot.send_video(message.chat.id, file_id)
         return
 
-    # Admin greeting
+    # 2️⃣ Admin greeting
     if user_id in ADMIN_IDS:
         ADMIN_IDS[user_id] = username
         bot.send_message(
             message.chat.id,
-            "👋 Hello Admin! Use the buttons below to manage the bot.",
-            reply_markup=get_admin_keyboard()
+            "👋 Welcome Admin! Use the buttons below to manage the bot.",
+            reply_markup=get_admin_keyboard(),
         )
         return
 
-    # Normal user
+    # 3️⃣ Normal user greeting
     bot.reply_to(message, "👋 Hello! Send me a valid link to get a video.")
 
 # ---------------- Video Upload ----------------
-@bot.message_handler(content_types=['video', 'document'])
+@bot.message_handler(content_types=["video", "document"])
 def handle_video(message):
     user_id = message.from_user.id
     username = message.from_user.username
@@ -103,25 +100,28 @@ def handle_video(message):
         return
 
     ADMIN_IDS[user_id] = username
-    video = message.video or (message.document if message.document.mime_type.startswith("video/") else None)
+
+    video = message.video or (
+        message.document if message.document.mime_type.startswith("video/") else None
+    )
     if not video:
         bot.reply_to(message, "⚠️ Please send a valid video file.")
         return
 
     token = secrets.token_urlsafe(8)
-    supabase.table("videos").insert({
-        "token": token,
-        "file_id": video.file_id
-    }).execute()
+
+    supabase.table("videos").insert(
+        {"token": token, "file_id": video.file_id}
+    ).execute()
 
     link = f"https://t.me/{bot.get_me().username}?start={token}"
     bot.reply_to(message, f"✅ Permanent link generated:\n{link}\n\nNo expiry.")
 
 # ---------------- Admin Button Actions ----------------
-@bot.message_handler(func=lambda m: m.text in [
-    "➕ Add Admin", "❌ Remove Admin", "👑 List Admins",
-    "📂 List Videos", "🔥 Destroy Video", "ℹ️ Help"
-])
+@bot.message_handler(
+    func=lambda m: m.text
+    in ["➕ Add Admin", "❌ Remove Admin", "👑 List Admins", "📂 List Videos", "🔥 Destroy Video"]
+)
 def handle_admin_buttons(message):
     user_id = message.from_user.id
     if user_id not in ADMIN_IDS:
@@ -130,62 +130,33 @@ def handle_admin_buttons(message):
 
     if message.text == "➕ Add Admin":
         if user_id != OWNER_ID:
-            bot.reply_to(message, "⚠️ Only the owner can add admins.")
+            bot.reply_to(message, "❌ Only the owner can add admins.")
             return
-        bot.reply_to(message, "Please enter user_id to add as admin:")
+        bot.reply_to(message, "➡️ Send the user_id to add as admin:")
         pending_action[user_id] = "addadmin"
 
     elif message.text == "❌ Remove Admin":
         if user_id != OWNER_ID:
-            bot.reply_to(message, "⚠️ Only the owner can remove admins.")
+            bot.reply_to(message, "❌ Only the owner can remove admins.")
             return
-        bot.reply_to(message, "Please enter user_id to remove:")
+        bot.reply_to(message, "➡️ Send the user_id to remove from admins:")
         pending_action[user_id] = "removeadmin"
 
     elif message.text == "👑 List Admins":
-        text = "👑 Current Admins:\n"
-        for uid, uname in ADMIN_IDS.items():
-            text += f"- `{uid}` @{uname if uname else 'N/A'}\n"
-        bot.reply_to(message, text, parse_mode="Markdown")
+        list_admins(message)
 
     elif message.text == "📂 List Videos":
-        try:
-            response = supabase.table("videos").select("token, created_at").execute()
-            videos = response.data
-            if not videos:
-                bot.reply_to(message, "ℹ️ No videos found.")
-                return
-            text = "📂 All Video Links:\n\n"
-            for v in videos:
-                link = f"https://t.me/{bot.get_me().username}?start={v['token']}"
-                token = escape_markdown(v['token'])
-                created = escape_markdown(v['created_at'])
-                safe_link = escape_markdown(link)
-                text += f"🎬 Token: `{token}`\n🔗 Link: {safe_link}\n🕒 Created: {created}\n\n"
-            bot.reply_to(message, text, parse_mode="MarkdownV2")
-        except Exception as e:
-            bot.reply_to(message, f"❌ Error fetching videos:\n{str(e)}")
+        list_videos(message)
 
     elif message.text == "🔥 Destroy Video":
-        bot.reply_to(message, "Please enter token to destroy:")
+        bot.reply_to(message, "➡️ Send the video token to destroy:")
         pending_action[user_id] = "destroy"
 
-    elif message.text == "ℹ️ Help":
-        bot.reply_to(message, (
-            "👑 Admin Help Menu:\n"
-            "- ➕ Add Admin (owner only)\n"
-            "- ❌ Remove Admin (owner only)\n"
-            "- 👑 List Admins\n"
-            "- 📂 List Videos\n"
-            "- 🔥 Destroy Video\n"
-            "- Send video to generate link"
-        ))
-
-# ---------------- Pending Action Handler ----------------
+# ---------------- Stateful Actions ----------------
 @bot.message_handler(func=lambda m: m.from_user.id in pending_action)
-def handle_pending(message):
+def handle_pending_actions(message):
     user_id = message.from_user.id
-    action = pending_action.get(user_id)
+    action = pending_action[user_id]
     text = message.text.strip()
 
     if action == "addadmin":
@@ -202,10 +173,10 @@ def handle_pending(message):
     elif action == "removeadmin":
         try:
             remove_id = int(text)
-            if remove_id not in ADMIN_IDS:
-                bot.reply_to(message, "ℹ️ This user is not an admin.")
-            elif remove_id == OWNER_ID:
+            if remove_id == OWNER_ID:
                 bot.reply_to(message, "⚠️ You cannot remove the owner!")
+            elif remove_id not in ADMIN_IDS:
+                bot.reply_to(message, "ℹ️ This user is not an admin.")
             else:
                 ADMIN_IDS.pop(remove_id)
                 bot.reply_to(message, f"✅ Removed admin: `{remove_id}`", parse_mode="Markdown")
@@ -213,14 +184,52 @@ def handle_pending(message):
             bot.reply_to(message, "❌ Invalid user_id.")
 
     elif action == "destroy":
-        response = supabase.table("videos").delete().eq("token", text).execute()
+        token = text
+        response = supabase.table("videos").delete().eq("token", token).execute()
         if response.data:
-            bot.reply_to(message, f"✅ Destroyed video with token `{text}`", parse_mode="Markdown")
+            bot.reply_to(
+                message, f"✅ Destroyed video with token `{token}`", parse_mode="Markdown"
+            )
         else:
             bot.reply_to(message, "❌ Token not found.")
 
-    # Clear pending action
-    pending_action.pop(user_id, None)
+    # clear action
+    del pending_action[user_id]
+
+# ---------------- Commands ----------------
+@bot.message_handler(commands=["listadmins"])
+def list_admins(message):
+    user_id = message.from_user.id
+    if user_id not in ADMIN_IDS:
+        return
+    text = "👑 Current Admins:\n"
+    for uid, uname in ADMIN_IDS.items():
+        text += f"- `{uid}` @{uname if uname else 'N/A'}\n"
+    bot.reply_to(message, text, parse_mode="Markdown")
+
+@bot.message_handler(commands=["listvideos"])
+def list_videos(message):
+    user_id = message.from_user.id
+    if user_id not in ADMIN_IDS:
+        return
+    try:
+        response = supabase.table("videos").select("token, created_at").execute()
+        videos = response.data
+        if not videos:
+            bot.reply_to(message, "ℹ️ No videos found.")
+            return
+        text = "📂 All Video Links:\n\n"
+        for v in videos:
+            link = f"https://t.me/{bot.get_me().username}?start={v['token']}"
+            token = escape_markdown(v["token"])
+            created = escape_markdown(v["created_at"])
+            safe_link = escape_markdown(link)
+            text += (
+                f"🎬 Token: `{token}`\n🔗 Link: {safe_link}\n🕒 Created: {created}\n\n"
+            )
+        bot.reply_to(message, text, parse_mode="MarkdownV2")
+    except Exception as e:
+        bot.reply_to(message, f"❌ Error fetching videos:\n{str(e)}")
 
 # ---------------- Run Flask ----------------
 if __name__ == "__main__":
