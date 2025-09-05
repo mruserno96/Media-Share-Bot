@@ -19,7 +19,7 @@ supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 # Admins: dict user_id -> username
 ADMIN_IDS = {
-    123456789: None  # 👑 Owner (replace with your Telegram user_id)
+    8356178010: None  # 👑 Owner (replace with your Telegram user_id)
 }
 OWNER_ID = list(ADMIN_IDS.keys())[0]
 
